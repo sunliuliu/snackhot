@@ -11,7 +11,11 @@
   ✅ RawItem 标准 6 字段，热度数据嵌入 raw_content JSON
 """
 import asyncio, re, json, sys, os, random, hashlib
-from pathlib import Path
+
+# 支持环境变量跳过（GitHub Actions 上跑不了，需要本地登录 cookie）
+import os as _os
+if _os.environ.get('SKIP_WEIBO'):
+    raise ImportError('SKIP_WEIBO=1, skipping Playwright weibo crawler')from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
