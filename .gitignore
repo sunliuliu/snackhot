@@ -1,0 +1,42 @@
+﻿# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+
+# Env & secrets (CRITICAL - never commit!)
+.env
+.env.local
+.env.*.local
+
+# Data
+data/
+_cache/
+_data/
+*.json.bak
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Browser profile (weibo 登录 cookie)
+.weibo_profile/
+
+# Trae
+.trae/
+.worktrees/
+.trae-cn/
+
+# Temp
+rth-deploy/
+*.tmp
+_push*.mjs

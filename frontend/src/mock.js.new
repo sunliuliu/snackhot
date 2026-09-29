@@ -1,0 +1,10 @@
+﻿python :   File "C:\Users\user\.trae-cn\worktrees\零食行业资讯热点系统\crawler\_gen_mock.py", line 111
+At line:137 char:1
++ python _gen_mock.py > "..\frontend\src\mock.js.new" 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  File "C:\User...k.py", line 111:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    print(f"  '/api/v1/story/{story_resp[\"id\"]}': {json.dumps(story_resp, ensure_ascii=False, indent=2)},")
+                                          ^
+SyntaxError: unexpected character after line continuation character

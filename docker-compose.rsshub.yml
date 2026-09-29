@@ -1,0 +1,19 @@
+﻿version: '3'
+services:
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: snack-rsshub
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      - NODE_ENV=production
+      - CACHE_TYPE=redis
+      - CACHE_EXPIRE=3600
+    # 可选 redis 缓存（更快）
+    # depends_on:
+    #   - redis
+
+# redis:
+#   image: redis:alpine
+#   container_name: snack-rsshub-redis
