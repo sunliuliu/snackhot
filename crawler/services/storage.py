@@ -1,4 +1,4 @@
-﻿"""本地存储 + 热铁盒推送（已加固版）
+"""本地存储 + 热铁盒推送（已加固版）
 
 加固点:
 ✅ payload 裁剪：只推 Top 200 精选 items
@@ -33,62 +33,67 @@ def save_local(items, events, daily=None):
     latest.write_text(json.dumps({"ts": ts, "items": len(items), "events": len(events)}))
     print(f"  [本地] {len(items)} items -> {items_path}")
 
+
 async def push_to_rth(items, events):
-    """推送到热铁盒（已加固）"""
+    """推送到热铁盒 — httpx 优先 + curl 3 次重试兜底"""
     if not RTH_INGEST_URL:
-        print("  [推送] 未配置 RTH_INGEST_URL，跳过推送")
+        print("  [推送] 未配置 RTH_INGEST_URL，跳过")
         return
-    
-    # 加固 1: payload 裁剪
+
     push_items = items[:200]
     push_events = events[:30]
-    
     payload = {
         "items": [it.model_dump(mode="json") for it in push_items],
         "events": [e.model_dump(mode="json") for e in push_events],
         "push_time": datetime.utcnow().isoformat(),
     }
     payload_size = len(json.dumps(payload, ensure_ascii=False).encode())
-    
+
+    # 方案 1: httpx
+    pushed = False
     try:
         import httpx
         async with httpx.AsyncClient(timeout=30) as client:
             headers = {"Content-Type": "application/json"}
             if RTH_API_KEY:
                 headers["X-API-Key"] = RTH_API_KEY
-            
             resp = await client.post(RTH_INGEST_URL, json=payload, headers=headers)
-            
             if resp.status_code == 200:
                 result = resp.json()
-                print(f"  [推送] ✅ 成功 -> {RTH_INGEST_URL}")
-                print(f"         {len(push_items)} items, {len(push_events)} events")
-                print(f"         payload: {payload_size/1024:.1f} KB")
-                if result.get('kv_operations'):
-                    print(f"         KV ops: {result['kv_operations']}/轮（远低于 1000 上限）")
+                print(f"  [推送] ✅ httpx -> {RTH_INGEST_URL}")
+                print(f"         {len(push_items)} items, {len(push_events)} events, {payload_size//1024} KB")
+                pushed = True
             elif resp.status_code == 429:
-                print(f"  [推送] ⏳ 热铁盒限流（429），本次跳过推送")
+                print(f"  [推送] ⏳ 限流，跳过")
+                return
             else:
-                print(f"  [推送] ⚠️  HTTP {resp.status_code}: {resp.text[:100]}")
-    except ImportError:
-        print("  [推送] httpx 未安装，跳过")
+                print(f"  [推送] ⚠️ httpx HTTP {resp.status_code}")
     except Exception as e:
-        # 3 次重试
-        import asyncio as _asyncio
-        ok = False
+        print(f"  [推送] httpx fail: {str(e)[:60]}")
+
+    # 方案 2: subprocess curl 重试 3 次
+    if not pushed:
+        import subprocess, asyncio as _aio
         for attempt in range(1, 4):
-            print(f"  [推送] retry {attempt}/3...")
-            await _asyncio.sleep(2 * attempt)
+            await _aio.sleep(2 * attempt)
             try:
-                async with httpx.AsyncClient(timeout=30) as rc:
-                    rr = await rc.post(RTH_INGEST_URL, json=payload, headers=headers)
-                    if rr.status_code == 200:
-                        print(f"  [推送] ✅ retry OK (attempt {attempt})")
-                        ok = True
-                        break
-                    else:
-                        print(f"  [推送] retry {attempt}: HTTP {rr.status_code}")
-            except Exception as re:
-                print(f"  [推送] retry {attempt} fail: {str(re)[:60]}")
-        if not ok:
-            print(f"  [推送] ❌ 3 retries all failed: {str(e)[:80]}")
+                args = ["curl", "-s", "--max-time", "30", "-X", "POST",
+                        RTH_INGEST_URL, "-H", "Content-Type: application/json"]
+                if RTH_API_KEY:
+                    args += ["-H", f"X-API-Key: {RTH_API_KEY}"]
+                args += ["-d", json.dumps(payload, ensure_ascii=False)]
+                result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+                body = result.stdout.strip() or result.stderr.strip()
+                if result.returncode == 0 and '"ok":true' in body:
+                    print(f"  [推送] ✅ curl retry {attempt}: {body[:120]}")
+                    pushed = True
+                    break
+                elif '"too frequent"' in body or '"unauthorized"' in body:
+                    print(f"  [推送] curl stop: {body[:80]}")
+                    return
+                else:
+                    print(f"  [推送] curl {attempt}: {body[:100]}")
+            except Exception as e:
+                print(f"  [推送] curl {attempt} fail: {str(e)[:60]}")
+        if not pushed:
+            print(f"  [推送] ❌ 全部失败，下次再试")
