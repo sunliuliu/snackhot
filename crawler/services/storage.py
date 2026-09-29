@@ -78,6 +78,11 @@ async def push_to_rth(items, events):
             await _aio.sleep(2 * attempt)
             try:
                 args = ["curl", "-s", "--max-time", "30", "-X", "POST",
+                        "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                        "-H", "Accept: application/json, text/plain, */*",
+                        "-H", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+                        "-H", "Origin: https://snackhot.rth3.xyz",
+                        "-H", "Referer: https://snackhot.rth3.xyz/",
                         RTH_INGEST_URL, "-H", "Content-Type: application/json"]
                 if RTH_API_KEY:
                     args += ["-H", f"X-API-Key: {RTH_API_KEY}"]
