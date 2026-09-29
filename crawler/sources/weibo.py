@@ -1,4 +1,8 @@
-﻿"""微博搜索爬虫 —— 零食行业 30 关键词
+﻿# SKIP_WEIBO: GitHub Actions 上跑不了（需要本地 Playwright 登录 cookie）
+import os as _os
+if _os.environ.get('SKIP_WEIBO'):
+    raise ImportError('SKIP_WEIBO=1, skipping weibo crawler')
+"""微博搜索爬虫 —— 零食行业 30 关键词
 
 使用 Playwright 持久化浏览器（cookie 已登录保存在 crawler/.weibo_profile/）
 首次运行会弹窗让用户登录微博，之后永久有效。
@@ -15,7 +19,7 @@ import asyncio, re, json, sys, os, random, hashlib
 # 支持环境变量跳过（GitHub Actions 上跑不了，需要本地登录 cookie）
 import os as _os
 if _os.environ.get('SKIP_WEIBO'):
-    raise ImportError('SKIP_WEIBO=1, skipping Playwright weibo crawler')from pathlib import Path
+    from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
