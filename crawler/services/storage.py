@@ -72,17 +72,23 @@ async def push_to_rth(items, events):
                 print(f"  [推送] ⚠️  HTTP {resp.status_code}: {resp.text[:100]}")
     except ImportError:
         print("  [推送] httpx 未安装，跳过")
-          except Exception as e:
-        # 重试 3 次
+    except Exception as e:
+        # 3 次重试
+        import asyncio as _asyncio
+        ok = False
         for attempt in range(1, 4):
-          print(f"  [推送] 第 {attempt} 次重试...")
-          await asyncio.sleep(2 * attempt)
-          try:
-            async with httpx.AsyncClient(timeout=30) as retry_client:
-              retry_resp = await retry_client.post(RTH_INGEST_URL, json=payload, headers=headers)
-              if retry_resp.status_code == 200:
-                print(f"  [推送] ✅ 重试成功 (attempt {attempt})")
-                break
-          except Exception as retry_e:
-            if attempt == 3:
-              print(f"  [推送] ❌ 3 次都失败: {str(retry_e)[:80]}")
+            print(f"  [推送] retry {attempt}/3...")
+            await _asyncio.sleep(2 * attempt)
+            try:
+                async with httpx.AsyncClient(timeout=30) as rc:
+                    rr = await rc.post(RTH_INGEST_URL, json=payload, headers=headers)
+                    if rr.status_code == 200:
+                        print(f"  [推送] ✅ retry OK (attempt {attempt})")
+                        ok = True
+                        break
+                    else:
+                        print(f"  [推送] retry {attempt}: HTTP {rr.status_code}")
+            except Exception as re:
+                print(f"  [推送] retry {attempt} fail: {str(re)[:60]}")
+        if not ok:
+            print(f"  [推送] ❌ 3 retries all failed: {str(e)[:80]}")
