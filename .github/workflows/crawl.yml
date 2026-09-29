@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - uses: actions/setup-python@v5
         with:
@@ -26,7 +28,6 @@ jobs:
 
       - name: Run crawler
         env:
-          # LLM (Agnes AI 主 + SenseNova 备用)
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
@@ -35,10 +36,8 @@ jobs:
           FALLBACK_MODELS: ${{ secrets.FALLBACK_MODELS }}
           SENSENOVA_BASE_URL: ${{ secrets.SENSENOVA_BASE_URL }}
           SENSENOVA_API_KEY: ${{ secrets.SENSENOVA_API_KEY }}
-          # 热铁盒推送
           RTH_INGEST_URL: ${{ secrets.RTH_INGEST_URL }}
           RTH_API_KEY: ${{ secrets.RTH_API_KEY }}
-          # 跳过微博 (GitHub Actions 无本地登录 cookie)
           SKIP_WEIBO: "1"
         run: |
           cd crawler
