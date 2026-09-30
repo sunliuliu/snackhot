@@ -1,32 +1,25 @@
-﻿# SKIP_WEIBO: GitHub Actions 上跑不了（需要本地 Playwright 登录 cookie）
-import os as _os
-if _os.environ.get('SKIP_WEIBO'):
-    raise ImportError('SKIP_WEIBO=1, skipping weibo crawler')
-"""微博搜索爬虫 —— 零食行业 30 关键词
+﻿"""微博搜索爬虫 —— 零食行业关键词（三模式自动切换）
 
-使用 Playwright 持久化浏览器（cookie 已登录保存在 crawler/.weibo_profile/）
-首次运行会弹窗让用户登录微博，之后永久有效。
+模式自动检测（优先级从上到下）:
+  1. COOKIE_STRING 模式: 环境变量 WEIBO_COOKIE 存在 → httpx 请求 m.weibo.cn JSON 接口
+     - GitHub Actions 可用，cookie 存 Secret
+     - 优点：不需要 Playwright，速度快
+     - 缺点：微博 cookie 几小时过期，需要手动更新
+  2. PLAYWRIGHT_PERSIST 模式: Playwright 已装 + crawler/.weibo_profile/ 存在
+     - 本地跑用，cookie 持久化在浏览器 profile
+     - 优点：最稳定，过反爬
+  3. SKIP 模式: 无 cookie 无 playwright → 返回空数组 + 打印 skip 日志
+     - 不 raise ImportError，不中断主流程
 
-特点：
-  ✅ 真实 Chromium 指纹（过微博反爬）
-  ✅ 持久化 cookie（登录一次永久有效）
-  ✅ 关键词搜索 + 转评赞 + 热度分计算
-  ✅ 内置过滤：优惠券/羊毛党/娱乐明星干扰
-  ✅ RawItem 标准 6 字段，热度数据嵌入 raw_content JSON
+关键词矩阵：30+ 零食相关关键词，带分类标注
 """
 import asyncio, re, json, sys, os, random, hashlib
-
-# 支持环境变量跳过（GitHub Actions 上跑不了，需要本地登录 cookie）
-import os as _os
-if _os.environ.get('SKIP_WEIBO'):
-    from pathlib import Path
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-# 确保无论从哪里 import 都能找到 base.py 和 models.py
-_HERE = os.path.dirname(os.path.abspath(__file__))        # crawler/sources/
-_PARENT = os.path.dirname(_HERE)                          # crawler/
-os.chdir(_PARENT)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PARENT = os.path.dirname(_HERE)
 sys.path.insert(0, _HERE)
 sys.path.insert(0, _PARENT)
 
@@ -43,60 +36,52 @@ try:
 except ImportError:
     HAS_PLAYWRIGHT = False
 
-# 持久化浏览器目录（crawler/.weibo_profile）
+import httpx
+from bs4 import BeautifulSoup
+
+# ============ 配置 ============
 USER_DATA_DIR = str(Path(__file__).resolve().parent.parent / ".weibo_profile")
+WEIBO_COOKIE_STR = os.environ.get("WEIBO_COOKIE", "").strip()
+WEIBO_MODE = os.environ.get("WEIBO_MODE", "").strip().lower()
 
 # ============ 防封保险 ============
-MIN_INTERVAL = 0.8       # 最小等待秒
-MAX_INTERVAL = 1.6       # 最大等待秒
-MAX_ROUNDS_PER_DAY = 6   # 每天最多爬几轮
+MIN_INTERVAL = 1.0
+MAX_INTERVAL = 2.2
+MAX_ROUNDS_PER_DAY = 8
 _state_file = Path(__file__).resolve().parent.parent / ".weibo_state.json"
 
 def _check_daily_limit() -> bool:
-    """检查今日是否已达上限"""
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
     try:
         if _state_file.exists():
             st = json.loads(_state_file.read_text())
+            today = datetime.now().strftime("%Y-%m-%d")
             if st.get("date") == today and st.get("rounds", 0) >= MAX_ROUNDS_PER_DAY:
                 return False
-    except:
-        pass
+    except: pass
     return True
 
 def _record_round():
-    """记录今日已爬一轮"""
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%Y-%m-%d")
     try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        st = {}
         if _state_file.exists():
             st = json.loads(_state_file.read_text())
-        else:
-            st = {}
-        if st.get("date") == today:
-            st["rounds"] = st.get("rounds", 0) + 1
-        else:
-            st = {"date": today, "rounds": 1}
+        st["date"] = today
+        st["rounds"] = st.get("rounds", 0) + 1
         _state_file.write_text(json.dumps(st))
-    except:
-        pass
+    except: pass
 
 
 # ============ 关键词矩阵 ============
-
-# ============ 新鲜零食赛道（10 个关键词） ============
 FRESH_SNACK_QUERIES = [
     {"keyword": "金粒门 鲜货", "category": "新鲜零食"},
     {"keyword": "鲜目录 新鲜零食", "category": "新鲜零食"},
     {"keyword": "新鲜零食 赛道", "category": "新鲜零食"},
     {"keyword": "锁鲜装 零食", "category": "新鲜零食"},
     {"keyword": "短保零食 烘焙", "category": "新鲜零食"},
-    {"keyword": "便利店 鲜食 面包", "category": "新鲜零食"},
     {"keyword": "现做卤味 鲜卤", "category": "新鲜零食"},
     {"keyword": "鲜切水果 零食", "category": "新鲜零食"},
     {"keyword": "量贩零食 鲜货", "category": "新鲜零食"},
-    {"keyword": "零食集合店 新鲜", "category": "新鲜零食"},
 ]
 
 SEARCH_QUERIES = [
@@ -112,7 +97,7 @@ SEARCH_QUERIES = [
     {"keyword": "零食很忙", "category": "渠道变革"},
     {"keyword": "赵一鸣零食", "category": "渠道变革"},
     {"keyword": "零食代连锁", "category": "渠道变革"},
-    {"keyword": "老婆大人量贩", "category": "渠道变革"},
+    {"keyword": "零食集合店", "category": "渠道变革"},
     {"keyword": "魔芋零食", "category": "品类趋势"},
     {"keyword": "辣条", "category": "品类趋势"},
     {"keyword": "坚果炒货", "category": "品类趋势"},
@@ -124,21 +109,20 @@ SEARCH_QUERIES = [
     {"keyword": "零食行业", "category": "行业观察"},
     {"keyword": "量贩零食", "category": "渠道变革"},
     {"keyword": "休闲食品", "category": "品类趋势"},
-    {"keyword": "零食连锁", "category": "渠道变革"},
     {"keyword": "胖东来零食", "category": "行业观察"},
     {"keyword": "零食联名", "category": "新品发布"},
     {"keyword": "新品发布 零食", "category": "新品发布"},
     {"keyword": "食品安全 零食", "category": "食品安全"},
+    {"keyword": "预制菜 零食", "category": "品类趋势"},
+    {"keyword": "零食连锁", "category": "渠道变革"},
 ] + FRESH_SNACK_QUERIES
 
-# ============ 黑名单（过滤无价值内容） ============
 NOISE_PATTERNS = [
     r"淘金币", r"拼多多.*5\.9", r"￥\d+.*秒杀", r"薅羊毛", r"白菜",
-    r"优惠券", r"返利", r"优惠群", r"小马甲", r"拼夕夕", r"福利价",
-    r"明星代言.*零食",  # 代言新闻先保留
+    r"优惠券", r"返利", r"优惠群", r"拼夕夕", r"福利价", r"抽奖",
+    r"粉丝福利", r"转发送",
 ]
 
-# 官方账号白名单
 OFFICIAL_ACCOUNTS = [
     "来伊份", "三只松鼠", "良品铺子", "洽洽食品官方微博",
     "好想来零食乐园", "零食很忙", "赵一鸣零食",
@@ -146,35 +130,162 @@ OFFICIAL_ACCOUNTS = [
 ]
 
 
+# ============ 模式选择 ============
+def _detect_mode() -> str:
+    """返回 'httpx' / 'playwright' / 'skip'"""
+    # 强制模式
+    if WEIBO_MODE in ('httpx', 'cookie') and WEIBO_COOKIE_STR:
+        return 'httpx'
+    if WEIBO_MODE in ('playwright', 'pw') and HAS_PLAYWRIGHT and os.path.isdir(USER_DATA_DIR):
+        return 'playwright'
+    if WEIBO_MODE == 'skip':
+        return 'skip'
 
-
+    # 自动检测
+    if WEIBO_COOKIE_STR:
+        return 'httpx'
+    if HAS_PLAYWRIGHT and os.path.isdir(USER_DATA_DIR):
+        return 'playwright'
+    return 'skip'
 
 
 class WeiboCrawler(BaseCrawler):
-    """微博关键词搜索爬虫（Playwright 持久化浏览器）"""
-
+    """微博关键词搜索爬虫（三模式自动切换: httpx+cookie / Playwright / skip）"""
     name = "weibo"
-    description = f"微博 {len(SEARCH_QUERIES)} 关键词搜索 + 转评赞热度"
+    description = f"微博 {len(SEARCH_QUERIES)} 关键词搜索 ({_detect_mode()} 模式)"
 
     def __init__(self):
         super().__init__()
-        if not HAS_PLAYWRIGHT:
-            raise ImportError("pip install playwright && python -m playwright install chromium")
+        self.mode = _detect_mode()
 
+    # ============ 主入口 ============
     async def fetch(self) -> List[RawItem]:
-        """异步爬取所有关键词"""
-        if not _check_daily_limit():
-            print(f"  ⏰ 今日微博已达上限 ({MAX_ROUNDS_PER_DAY}轮)，跳过", flush=True)
+        if self.mode == 'skip':
+            print("  [weibo] ⏭️ skip (no WEIBO_COOKIE env or Playwright profile). Set WEIBO_COOKIE or .weibo_profile/ to enable.")
             return []
-        _record_round()
-        all_items = []
+        if not _check_daily_limit():
+            print(f"  [weibo] ⏰ 今日已达上限 ({MAX_ROUNDS_PER_DAY}轮)")
+            return []
 
+        _record_round()
+        print(f"  [weibo] 🚀 {self.mode} 模式, {len(SEARCH_QUERIES)} 关键词")
+
+        if self.mode == 'httpx':
+            items = await self._fetch_httpx()
+        else:
+            items = await self._fetch_playwright()
+
+        unique = self._dedupe(items)
+        print(f"  [weibo] 📊 总计 {len(items)} → 去重后 {len(unique)} 条")
+        return unique
+
+    # ============ httpx + cookie 模式 ============
+    async def _fetch_httpx(self) -> List[RawItem]:
+        """用 httpx 请求 m.weibo.cn 移动版 JSON 接口"""
+        import urllib.parse
+        items = []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 MicroMessenger/8.0.38",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://m.weibo.cn/",
+            "Cookie": WEIBO_COOKIE_STR,
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+        async with httpx.AsyncClient(headers=headers, timeout=20, follow_redirects=True) as c:
+            for i, q in enumerate(SEARCH_QUERIES):
+                keyword = q['keyword']
+                encoded = urllib.parse.quote(keyword)
+                url = f"https://m.weibo.cn/api/container/getIndex?containerid=100103type%3D1%26q%3D{encoded}&page_type=searchall"
+                try:
+                    resp = await c.get(url)
+                    if resp.status_code != 200:
+                        print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {keyword}: HTTP {resp.status_code}")
+                        continue
+                    data = resp.json()
+                    if data.get('ok') != 1:
+                        print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {keyword}: api ok != 1 (可能 cookie 过期)")
+                        continue
+                    cards = data.get('data', {}).get('cards', [])
+                    count = 0
+                    for card in cards:
+                        if card.get('card_type') == 9:
+                            mblog = card.get('mblog', {})
+                            text = mblog.get('text', '')
+                            # 去除 HTML 标签
+                            text = BeautifulSoup(text, 'html.parser').get_text(strip=True)
+                            if not text or len(text) < 20:
+                                continue
+                            if self._is_noise(text):
+                                continue
+
+                            user = mblog.get('user', {}).get('screen_name', '')
+                            bid = mblog.get('bid', '')
+                            reposts_count = mblog.get('reposts_count', 0)
+                            comments_count = mblog.get('comments_count', 0)
+                            attitudes_count = mblog.get('attitudes_count', 0)
+                            heat_score = reposts_count * 3 + comments_count * 2 + attitudes_count
+
+                            created_at = mblog.get('created_at', '')
+                            published = self._parse_api_time(created_at)
+
+                            raw_item = RawItem(
+                                source_name=f"微博-{keyword}",
+                                title=self._extract_title(text),
+                                url=f"https://m.weibo.cn/detail/{bid}" if bid else "",
+                                author=user,
+                                published_at=published,
+                                raw_content=json.dumps({
+                                    "raw_text": text,
+                                    "repost": reposts_count,
+                                    "comment": comments_count,
+                                    "like": attitudes_count,
+                                    "heat_score": heat_score,
+                                    "keyword": keyword,
+                                    "category": q["category"],
+                                    "mode": "httpx_cookie",
+                                }, ensure_ascii=False),
+                            )
+                            items.append(raw_item)
+                            count += 1
+
+                    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {keyword}: {count} 条", flush=True)
+
+                except Exception as e:
+                    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {keyword}: {str(e)[:50]}")
+
+                await asyncio.sleep(random.uniform(MIN_INTERVAL, MAX_INTERVAL))
+
+        return items
+
+    def _parse_api_time(self, t: str) -> Optional[datetime]:
+        """微博 API 返回的 created_at 格式: 'Tue Sep 30 15:30:00 +0800 2026'"""
+        if not t: return None
+        try:
+            # 尝试 ISO 格式
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(t).replace(tzinfo=None)
+        except: pass
+        try:
+            # 手动解析
+            import re
+            m = re.match(r'\w+\s+(\w+)\s+(\d+)\s+(\d+):(\d+):\d+\s+\+\d+\s+(\d+)', t)
+            if m:
+                month_str, day, hour, minute, year = m.groups()
+                months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+                return datetime(int(year), months.get(month_str, 1), int(day), int(hour), int(minute))
+        except: pass
+        return None
+
+    # ============ Playwright 持久化模式 (本地) ============
+    async def _fetch_playwright(self) -> List[RawItem]:
         async with async_playwright() as p:
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=USER_DATA_DIR,
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36",
                 viewport={"width": 1440, "height": 900},
                 locale="zh-CN",
             )
@@ -183,132 +294,103 @@ class WeiboCrawler(BaseCrawler):
             )
 
             page = context.pages[0] if context.pages else await context.new_page()
+            items = []
 
             for i, q in enumerate(SEARCH_QUERIES):
                 url = f"https://s.weibo.com/weibo?q={q['keyword']}&typeall=1&suball=1"
                 try:
                     await page.goto(url, timeout=30000, wait_until="domcontentloaded")
                     await page.wait_for_timeout(1200)
-
                     cur = page.url
                     if "passport" in cur or "login" in cur.lower():
-                        print(f"  ⚠️ Cookie 过期（{q['keyword']}），请重新登录", flush=True)
+                        print(f"  [weibo] ⚠️ cookie 过期 ({q['keyword']}), 请重新登录 .weibo_profile/")
                         break
 
                     cards = await page.query_selector_all(".card-wrap")
-                    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {q['keyword']}: {len(cards)} 条", flush=True)
+                    count = 0
+                    for c in cards:
+                        textEl = await c.query_selector('p[node-type*="feed_list_content"], .content, .txt')
+                        if not textEl: continue
+                        text = (await textEl.inner_text()).strip().replace("\n", " ")[:500]
+                        if not text or len(text) < 20 or self._is_noise(text): continue
 
-                    items = await page.evaluate("""(meta) => {
-                        const results = [];
-                        document.querySelectorAll('.card-wrap').forEach((c) => {
-                            if (c.innerText.includes('推广') || c.innerText.includes('广告')) return;
-                            const textEl = c.querySelector('p[node-type*="feed_list_content"], .content, .txt');
-                            const text = textEl ? textEl.innerText.trim().replace(/\\n/g, ' ').substring(0, 500) : '';
-                            if (!text || text.length < 20) return;
-                            const userEl = c.querySelector('.name, a[href*="/u/"][class*="ico"], .m-text-box a');
-                            const userName = userEl ? userEl.textContent.trim() : '';
-                            const timeEl = c.querySelector('a[href*="/status/"], .from a, a[class*="date"]');
-                            const timeText = timeEl ? timeEl.textContent.trim() : '';
-                            const link = timeEl ? timeEl.href : '';
-                            // 转评赞：遍历所有 a/em/span 找纯数字文本
-                            let repost = 0, comment = 0, like = 0;
-                            const allEls = c.querySelectorAll('a, em, span, .woo-box-item-flex');
-                            const rawNums = new Set();
-                            allEls.forEach(el => {
-                                let t = el.textContent.trim();
-                                t = t.replace(/[\\s,]/g,'');
-                                const m = t.match(/^([0-9]+(\\.\\d+)?)([万w])?$/);
-                                if (m) {
-                                    let v = parseFloat(m[1]);
-                                    if (m[3]) v *= 10000;
-                                    if (v >= 0 && v < 10000000) rawNums.add(Math.round(v));
-                                }
-                            });
-                            const nums = Array.from(rawNums).sort((a,b)=>b-a);
-                            if (nums.length >= 2) { repost = nums[0]; comment = nums[1]; like = nums.length > 2 ? nums[2] : nums[1]; }
-                            else if (nums.length === 1) { like = nums[0]; }
-                            results.push({ text, userName, timeText, link, repost, comment, like });
-                        });
-                        return results;
-                    }""", q)
+                        userEl = await c.query_selector('.name, a[href*="/u/"]')
+                        userName = (await userEl.inner_text()).strip() if userEl else ""
+                        timeEl = await c.query_selector('a[href*="/status/"], .from a')
+                        timeText = (await timeEl.inner_text()).strip() if timeEl else ""
+                        link = await timeEl.get_attribute('href') if timeEl else ""
 
-                    for it in items:
-                        if self._is_noise(it["text"]):
-                            continue
-                        heat_score = it["repost"] * 3 + it["comment"] * 2 + it["like"]
-                        meta_json = json.dumps({
-                            "raw_text": it["text"],
-                            "repost": it["repost"],
-                            "comment": it["comment"],
-                            "like": it["like"],
-                            "heat_score": heat_score,
-                            "keyword": q["keyword"],
-                            "category": q["category"],
-                        }, ensure_ascii=False)
-                        raw = RawItem(
+                        # 转评赞提取
+                        nums = []
+                        for sel in ['.woo-like-count', '.woo-comment', '.woo-forward']:
+                            el = await c.query_selector(sel)
+                            if el:
+                                t = (await el.inner_text()).strip()
+                                t = re.sub(r'[^\d.]', '', t)
+                                if t:
+                                    try: nums.append(float(t))
+                                    except: pass
+
+                        heat = (nums[0]*3 + nums[1]*2 + nums[2]) if len(nums) >= 3 else 0
+
+                        raw_item = RawItem(
                             source_name=f"微博-{q['keyword']}",
-                            title=self._extract_title(it["text"]),
-                            url=it["link"],
-                            author=it["userName"],
-                            published_at=self._parse_time(it["timeText"]),
-                            raw_content=meta_json,
+                            title=self._extract_title(text),
+                            url=link or "",
+                            author=userName,
+                            published_at=self._parse_time(timeText),
+                            raw_content=json.dumps({
+                                "raw_text": text, "heat_score": heat,
+                                "keyword": q["keyword"], "category": q["category"],
+                                "mode": "playwright_persist",
+                            }, ensure_ascii=False),
                         )
-                        all_items.append(raw)
+                        items.append(raw_item)
+                        count += 1
 
+                    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {q['keyword']}: {count} 条")
                 except Exception as e:
-                    print(f"  ❌ {q['keyword']}: {str(e)[:50]}", flush=True)
-                    continue
+                    print(f"  ❌ {q['keyword']}: {str(e)[:50]}")
 
-                await page.wait_for_timeout(int(random.uniform(MIN_INTERVAL, MAX_INTERVAL) * 1000))
+                await asyncio.sleep(random.uniform(MIN_INTERVAL, MAX_INTERVAL))
 
             await context.close()
 
-        unique = self._dedupe(all_items)
-        print(f"\\n📊 微博总计: {len(all_items)} → 过滤后 {len(unique)} 条有效", flush=True)
-        return unique
+        return items
 
+    # ============ 通用辅助 ============
     def _is_noise(self, text: str) -> bool:
         for pat in NOISE_PATTERNS:
-            if re.search(pat, text):
-                return True
+            if re.search(pat, text): return True
         return len(text) < 40
 
     def _extract_title(self, text: str) -> str:
-        # 去掉开头的 "c 用户名" 之类的用户名前缀（微博 DOM 解析出来带的）
         clean = re.sub(r"^c\s+\S+\s+", "", text).strip()
-        clean = re.sub(r"@\S+\s*", "", clean)      # 去掉 @人
-        clean = re.sub(r"#([^#]+)#", "", clean).strip()  # 去掉话题 tag
-        clean = re.sub(r"\\s+", " ", clean).strip()
+        clean = re.sub(r"@\S+\s*", "", clean)
+        clean = re.sub(r"#([^#]+)#", "", clean).strip()
+        clean = re.sub(r"\s+", " ", clean).strip()
         return clean[:70] + ("..." if len(clean) > 70 else "")
 
     def _parse_time(self, t: str) -> Optional[datetime]:
         now = datetime.now()
         try:
-            if "分钟前" in t:
-                return now - timedelta(minutes=int(re.search(r"(\\d+)", t).group(1)))
-            elif "小时前" in t:
-                return now - timedelta(hours=int(re.search(r"(\\d+)", t).group(1)))
+            if "分钟前" in t: return now - timedelta(minutes=int(re.search(r"(\d+)", t).group(1)))
+            elif "小时前" in t: return now - timedelta(hours=int(re.search(r"(\d+)", t).group(1)))
             elif "今天" in t:
-                m = re.search(r"(\\d+)[.:](\\d+)", t)
+                m = re.search(r"(\d+)[.:](\d+)", t)
                 if m: return now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0)
             elif "昨天" in t:
-                m = re.search(r"(\\d+)[.:](\\d+)", t)
+                m = re.search(r"(\d+)[.:](\d+)", t)
                 if m: return (now - timedelta(days=1)).replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0)
-            elif re.match(r"\\d+月\\d+日", t):
-                m = re.match(r"(\\d+)月(\\d+)日", t)
-                if m: return now.replace(month=int(m.group(1)), day=int(m.group(2)))
-        except:
-            pass
+        except: pass
         return None
 
     def _dedupe(self, items: List[RawItem]) -> List[RawItem]:
-        seen = set()
-        unique = []
+        seen = set(); unique = []
         for it in items:
             key = it.title[:30]
             if key not in seen:
-                seen.add(key)
-                unique.append(it)
+                seen.add(key); unique.append(it)
         unique.sort(key=lambda x: self._get_heat(x), reverse=True)
         return unique
 
@@ -316,15 +398,14 @@ class WeiboCrawler(BaseCrawler):
         try:
             meta = json.loads(item.raw_content) if item.raw_content else {}
             return meta.get("heat_score", 0)
-        except:
-            return 0
+        except: return 0
 
 
 if __name__ == "__main__":
     async def test():
         src = WeiboCrawler()
         items = await src.fetch()
-        print(f"\\n=== Top 10 by heat_score ===")
+        print(f"\n=== Top 10 by heat_score ===")
         for it in items[:10]:
             try: meta = json.loads(it.raw_content) if it.raw_content else {}
             except: meta = {}

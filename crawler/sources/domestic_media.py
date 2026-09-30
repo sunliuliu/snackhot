@@ -1,9 +1,8 @@
 ﻿"""
 国内新闻源（替换 Google News RSS，零墙）:
-  1. 澎湃新闻 thepaper.cn （食品饮料频道）
-  2. 食品商务网 21food.cn （行业资讯）
+  1. 澎湃新闻 thepaper.cn （食品饮料 + 消费 + 财经多频道交叉）
+  2. 食品商务网 21food.cn （JS 动态渲染，通过 RSSHub 桥接 + 多实例 fallback）
   3. 中国经济网 ce.cn （食品板块）
-  4. 36氪 food.36kr.com （食品餐饮频道）
 全 HTTPX 静态爬，无反爬，秒级稳定。
 """
 import asyncio, sys, os, re
@@ -20,6 +19,8 @@ FOOD_KW = [
     '三只松鼠', '良品铺子', '卫龙', '洽洽', '盐津铺子', '来伊份', '绝味', '周黑鸭',
     '安井', '海天', '伊利', '金龙鱼', '桃李', '钟薛高', '元气森林',
     '好想来', '零食很忙', '赵一鸣', '量贩', '连锁', '金粒门', '鲜货', '新鲜零食',
+    '食品安全', '食品工业', '食品质量', '农产品', '预制菜', '生鲜',
+    '消费', '餐饮', '奶茶', '咖啡', '酒',
 ]
 
 def _is_food_related(text: str) -> bool:
@@ -29,12 +30,13 @@ def _is_food_related(text: str) -> bool:
 
 
 class ThepaperCrawler(BaseCrawler):
-    """澎湃新闻 - 食品饮料频道"""
+    """澎湃新闻 - 食品饮料 + 消费 + 财经多频道交叉"""
     name = "thepaper"
     base_url = "https://www.thepaper.cn"
     crawl_urls = [
         "https://www.thepaper.cn/channel_25951",  # 食品饮料
         "https://www.thepaper.cn/channel_25950",  # 消费
+        "https://www.thepaper.cn/channel_25952",  # 财经
     ]
 
     async def fetch(self) -> List[RawItem]:
@@ -45,10 +47,10 @@ class ThepaperCrawler(BaseCrawler):
         async with httpx.AsyncClient(headers=self.headers, timeout=self.timeout, follow_redirects=True) as c:
             for url in self.crawl_urls:
                 try:
-                    resp = await self._get(url)
-                    if not resp: continue
-                    soup = BeautifulSoup(resp, 'html.parser')
-                    for a in soup.select('a[href*="newsDetail"], a[href*="news_"], .news_li a'):
+                    resp = await c.get(url)
+                    if resp.status_code != 200: continue
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    for a in soup.select('a[href*="newsDetail"]'):
                         title = a.get_text(strip=True)
                         href = a.get('href', '')
                         if title and len(title) > 8 and _is_food_related(title):
@@ -59,22 +61,28 @@ class ThepaperCrawler(BaseCrawler):
                                     source_name="澎湃新闻", title=title, url=full,
                                     published_at=None, discovered_at=None, raw_content="", author=None,
                                 ))
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
                 except Exception as e:
                     print(f"  [thepaper] {url} 失败: {str(e)[:50]}")
         print(f"  [thepaper] {len(items)} 条")
         return items[:40]
 
 
+# RSSHub 公开实例列表 (按优先级 fallback)
+RSSHUB_INSTANCES = [
+    "https://rsshub.rssforever.com",
+    "https://rsshub.app",
+]
+
 class Food21Crawler(BaseCrawler):
-    """食品商务网 - 行业资讯（零食/休闲食品）"""
+    """食品商务网 - RSSHub 桥接 + 多实例 fallback"""
     name = "food21"
     base_url = "https://news.21food.cn"
-    crawl_urls = [
-        "https://news.21food.cn/list-1.html",       # 全部资讯
-        "https://news.21food.cn/list-43.html",      # 休闲食品
-        "https://news.21food.cn/list-62.html",      # 糖果巧克力
-        "https://news.21food.cn/list-3.html",       # 烘焙食品
+    # 内部路由模板
+    _rss_routes = [
+        "/21food/news/list-1",     # 全部资讯
+        "/21food/news/list-43",    # 休闲食品
+        "/21food/news/list-62",    # 糖果巧克力
     ]
 
     async def fetch(self) -> List[RawItem]:
@@ -82,26 +90,42 @@ class Food21Crawler(BaseCrawler):
         from bs4 import BeautifulSoup
         items = []
         seen = set()
-        async with httpx.AsyncClient(headers=self.headers, timeout=self.timeout, follow_redirects=True) as c:
-            for url in self.crawl_urls:
-                try:
-                    resp = await self._get(url)
-                    if not resp: continue
-                    soup = BeautifulSoup(resp, 'html.parser')
-                    for a in soup.select('a[href*="html"], .list_item a, .news-list a'):
-                        title = a.get_text(strip=True)
-                        href = a.get('href', '')
-                        if title and len(title) > 6 and _is_food_related(title):
-                            full = href if href.startswith('http') else self.base_url + '/' + href.lstrip('/')
-                            if full not in seen:
-                                seen.add(full)
-                                items.append(RawItem(
-                                    source_name="食品商务网", title=title, url=full,
-                                    published_at=None, discovered_at=None, raw_content="", author=None,
-                                ))
-                    await asyncio.sleep(1.5)
-                except Exception as e:
-                    print(f"  [food21] {url} 失败: {str(e)[:50]}")
+
+        async with httpx.AsyncClient(headers=self.headers, timeout=15, follow_redirects=True) as c:
+            for route in self._rss_routes:
+                # 尝试每个 RSSHub 实例
+                resp = None
+                for instance in RSSHUB_INSTANCES:
+                    url = instance + route
+                    try:
+                        r = await c.get(url)
+                        if r.status_code == 200 and len(r.text) > 300 and '<title>' in r.text:
+                            resp = r
+                            break
+                    except Exception:
+                        continue
+
+                if not resp:
+                    print(f"  [food21] {route}: 所有 RSSHub 实例都失败 (跳过)")
+                    continue
+
+                # RSS 解析
+                soup = BeautifulSoup(resp.text, 'xml')
+                for item in soup.find_all('item'):
+                    title_el = item.find('title')
+                    link_el = item.find('link')
+                    if not title_el or not link_el: continue
+                    title = title_el.get_text(strip=True)
+                    link = link_el.get_text(strip=True)
+                    if title and len(title) > 6 and _is_food_related(title):
+                        if link not in seen:
+                            seen.add(link)
+                            items.append(RawItem(
+                                source_name="食品商务网", title=title, url=link,
+                                published_at=None, discovered_at=None, raw_content="", author=None,
+                            ))
+                await asyncio.sleep(1.0)
+
         print(f"  [food21] {len(items)} 条")
         return items[:50]
 
@@ -112,7 +136,6 @@ class CeCrawler(BaseCrawler):
     base_url = "http://www.ce.cn"
     crawl_urls = [
         "http://www.ce.cn/cysc/sp/",               # 食品
-        "http://www.ce.cn/cysc/sp/shipin/",        # 食品工业
     ]
 
     async def fetch(self) -> List[RawItem]:
@@ -123,13 +146,13 @@ class CeCrawler(BaseCrawler):
         async with httpx.AsyncClient(headers=self.headers, timeout=self.timeout, follow_redirects=True) as c:
             for url in self.crawl_urls:
                 try:
-                    resp = await self._get(url)
-                    if not resp: continue
-                    soup = BeautifulSoup(resp, 'html.parser')
+                    resp = await c.get(url)
+                    if resp.status_code != 200: continue
+                    soup = BeautifulSoup(resp.text, 'html.parser')
                     for a in soup.select('a'):
                         title = a.get_text(strip=True)
                         href = a.get('href', '')
-                        if title and len(title) > 10 and _is_food_related(title) and href.endswith('.shtml'):
+                        if title and len(title) > 10 and _is_food_related(title) and (href.endswith('.shtml') or '/cysc/' in href):
                             full = href if href.startswith('http') else self.base_url + href
                             if full not in seen:
                                 seen.add(full)

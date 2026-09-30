@@ -1,4 +1,4 @@
-﻿name: SnackHot Crawler & Auto-Deploy
+name: SnackHot Crawler & Auto-Deploy
 
 on:
   schedule:
@@ -38,7 +38,7 @@ jobs:
           SENSENOVA_API_KEY: ${{ secrets.SENSENOVA_API_KEY }}
           RTH_INGEST_URL: ${{ secrets.RTH_INGEST_URL }}
           RTH_API_KEY: ${{ secrets.RTH_API_KEY }}
-          SKIP_WEIBO: "1"
+          WEIBO_COOKIE: ${{ secrets.WEIBO_COOKIE }}
         run: |
           cd crawler
           python main.py
