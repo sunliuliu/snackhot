@@ -25,6 +25,7 @@ if _PARENT not in sys.path:
 from .base import BaseCrawler
 from models import RawItem
 import httpx
+from urllib.parse import quote
 from datetime import datetime
 
 # ============ 配置 ============
@@ -91,7 +92,7 @@ class RSSHubCrawler(BaseCrawler):
         urls = []
         for kw in KEYWORDS:
             for tpl in ROUTE_TEMPLATES:
-                urls.append(f"{RSSHUB_BASE}{tpl.format(kw=requests.utils.quote(kw))}")
+                urls.append(f"{RSSHUB_BASE}{tpl.format(kw=quote(kw))}")
 
         print(f"  RSSHub: 请求 {len(urls)} 个路由...", flush=True)
         tasks = [_fetch_one(u) for u in urls]

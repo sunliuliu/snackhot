@@ -1,4 +1,4 @@
-@tailwind base;
+﻿@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -284,34 +284,3 @@
 
 /* ============ 选择禁用 ============ */
 .no-select { user-select: none; }
-/* ============ Skeleton Loading ============ */
-.skeleton {
-  background: linear-gradient(90deg, #e8e8e4 25%, #f5f5f2 50%, #e8e8e4 75%);
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
-  border-radius: 6px;
-}
-@keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* Skeleton 卡片布局 */
-.skel-item { padding: 16px 0; border-bottom: 1px solid rgb(223,228,225); }
-.skel-title { height: 16px; width: 80%; margin-bottom: 8px; }
-.skel-meta { height: 12px; width: 40%; margin-bottom: 12px; }
-.skel-summary { height: 12px; width: 100%; margin-bottom: 6px; }
-.skel-summary:last-child { width: 70%; }
-
-/* Hot Topics Skeleton */
-.skel-hot { display: flex; gap: 16px; padding: 16px 0; border-bottom: 1px solid rgb(223,228,225); }
-.skel-hot-rank { width: 40px; height: 36px; }
-.skel-hot-title { height: 16px; width: 70%; margin-bottom: 10px; }
-.skel-hot-meta { height: 11px; width: 50%; }
-.skel-hot-score { width: 48px; height: 20px; margin-left: auto; }
-
-/* Daily Skeleton */
-.skel-daily-stat { display: flex; gap: 24px; margin-bottom: 24px; }
-.skel-daily-stat-item { flex: 1; padding: 16px; background: rgb(249,249,247); border-radius: 10px; }
-.skel-daily-stat-num { height: 28px; width: 60%; margin-bottom: 8px; }
-.skel-daily-stat-label { height: 12px; width: 80%; }
