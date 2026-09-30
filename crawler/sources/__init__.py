@@ -11,6 +11,14 @@ from .rsshub import RSSHubCrawler
 from .cfnews import CfnewsCrawler
 from .cfsn import CfsnCrawler
 from .news_cn import XinhuaFoodCrawler
+from .caixin import CaixinCrawler
+from .jiemian import JiemianCrawler
+from .china_com import ChinaComCrawler
+from .spzs import SpzsCrawler
+from .cnstock import CnstockCrawler
+from .samr import SamrCrawler
+from .spgykj import SpgykjCrawler
+from .chinacoop import ChinacoopCrawler
 
 try:
     from .weibo import WeiboCrawler
@@ -21,7 +29,7 @@ except ImportError as e:
 
 # ============ 同步 HTTPX 爬虫 ============
 ALL_CRAWLERS = [
-    # ---- 原有 11 个 ----
+    # 原有 11 个
     FoodailyCrawler(),
     LinkshopCrawler(),
     CninfoCrawler(),
@@ -33,10 +41,20 @@ ALL_CRAWLERS = [
     Food21Crawler(),
     CeCrawler(),
     RSSHubCrawler(),
-    # ---- 新增 3 个 ----
-    CfnewsCrawler(),       # 中国食品新闻网 (中食协, 25条)
-    CfsnCrawler(),          # 中国食品安全网 (监管/抽检, 25条)
-    XinhuaFoodCrawler(),    # 新华网食品频道 (权威)
+    # 第一轮新增 3 个
+    CfnewsCrawler(),
+    CfsnCrawler(),
+    XinhuaFoodCrawler(),
+    # 第二轮新增 5 个 (消费/财经/B2B)
+    CaixinCrawler(),
+    JiemianCrawler(),
+    ChinaComCrawler(),
+    SpzsCrawler(),
+    CnstockCrawler(),
+    # 第三轮新增 3 个 (监管/科技/供销)
+    SamrCrawler(),
+    SpgykjCrawler(),
+    ChinacoopCrawler(),
 ]
 
 # ============ 异步 / Playwright 爬虫 ============
