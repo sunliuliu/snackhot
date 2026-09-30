@@ -121,10 +121,32 @@ async function main() {
   await db.set('index__latest_date', dateStr);
   await db.set('index__event_ids', JSON.stringify(hotEventIds));
 
+  // 构造每日早报增强版
+  const dailyByCat = {};
+  items.forEach(it => {
+    const cat = it.category || '其他';
+    if (!dailyByCat[cat]) dailyByCat[cat] = [];
+    if (dailyByCat[cat].length < 5) dailyByCat[cat].push(it);
+  });
+  const sections = Object.entries(dailyByCat).map(([cat, arr]) => ({
+    category: cat,
+    count: arr.length,
+    headlines: arr.map(x => x.title),
+  })).sort((a, b) => b.count - a.count).slice(0, 8);
+
+  // highlights: 选评分最高的 5 条
+  const highlights = items
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, 5)
+    .map(x => x.title);
+
   await db.set('daily__' + dateStr, JSON.stringify({
     date: dateStr, generated_at: tsStr,
     item_count: items.length, event_count: events.length,
     top_events: events.slice(0, 5).map(e => ({ title: e.title, score: e.hot_score })),
+    highlights: highlights,
+    sections: sections,
+    top_brands: [],
   }));
   await db.set('daily__latest', 'daily__' + dateStr);
 
