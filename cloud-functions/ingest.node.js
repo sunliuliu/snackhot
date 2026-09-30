@@ -78,7 +78,7 @@ async function main() {
   if (!adminBypass) {
     const lastPush = await db.get('meta__last_push_ts');
     const now = Date.now();
-    if (lastPush && now - parseInt(lastPush) < 1 * 60 * 1000) {
+    if (lastPush && now - parseInt(lastPush) < 5 * 1000) {
       return document.write(JSON.stringify({ ok: false, error: 'too frequent (< 15 min)' }));
     }
   }
